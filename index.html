@@ -1545,7 +1545,8 @@ select.form-control { cursor: pointer; }
 const SUPABASE_URL = 'https://xrzquinffytavwgvvlxr.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhyenF1aW5mZnl0YXZ3Z3Z2bHhyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwMzk3NDksImV4cCI6MjA5NTYxNTc0OX0.HwcYM_nq0onOKOBTFY1ucZmeRNUZqXNwdMIJ7P0PSRI';
 
-let supabase;
+// REMOVIDA a declaração duplicada - apenas UMA vez!
+let supabaseClient = null;
 let currentUser = null;
 let settings = {
   currency: '€',
@@ -1569,7 +1570,7 @@ let nextInvNum = 1;
 
 // ===== INICIALIZAÇÃO =====
 async function initSupabase() {
-  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   console.log('Supabase inicializado com sucesso!');
   await loadAllData();
   updateSyncStatus(true);
@@ -1588,17 +1589,17 @@ function updateSyncStatus(online) {
 
 // ===== LOAD ALL DATA =====
 async function loadAllData() {
-  if (!supabase) return;
+  if (!supabaseClient) return;
   
   try {
     document.getElementById('sync-status').innerHTML = '<div class="spinner"></div> Carregando...';
     
     const [productsRes, salesRes, debtsRes, expensesRes, activitiesRes] = await Promise.all([
-      supabase.from('products').select('*').order('created_at', { ascending: false }),
-      supabase.from('sales').select('*').order('created_at', { ascending: false }),
-      supabase.from('debts').select('*').order('created_at', { ascending: false }),
-      supabase.from('expenses').select('*').order('created_at', { ascending: false }),
-      supabase.from('activities').select('*').order('created_at', { ascending: false }).limit(50)
+      supabaseClient.from('products').select('*').order('created_at', { ascending: false }),
+      supabaseClient.from('sales').select('*').order('created_at', { ascending: false }),
+      supabaseClient.from('debts').select('*').order('created_at', { ascending: false }),
+      supabaseClient.from('expenses').select('*').order('created_at', { ascending: false }),
+      supabaseClient.from('activities').select('*').order('created_at', { ascending: false }).limit(50)
     ]);
     
     products = productsRes.data || [];
@@ -1618,7 +1619,7 @@ async function loadAllData() {
     
     // Carregar configurações do utilizador
     if (currentUser) {
-      const { data: userSettings } = await supabase
+      const { data: userSettings } = await supabaseClient
         .from('user_settings')
         .select('*')
         .eq('user_id', currentUser.id)
@@ -1643,13 +1644,13 @@ async function loadAllData() {
   } catch (e) {
     console.error('Erro ao carregar dados:', e);
     updateSyncStatus(false);
-    toast('Erro ao conectar com o servidor. Verifique a sua ligação.', 'error');
+    toast('Erro ao conectar com o servidor.', 'error');
   }
 }
 
 // ===== ADD ACTIVITY =====
 async function addActivity(msg, type = 'info') {
-  if (!supabase || !currentUser) return;
+  if (!supabaseClient || !currentUser) return;
   
   const activity = { 
     message: msg, 
@@ -1660,7 +1661,7 @@ async function addActivity(msg, type = 'info') {
   };
   
   try {
-    const { data } = await supabase.from('activities').insert(activity).select();
+    const { data } = await supabaseClient.from('activities').insert(activity).select();
     if (data) activities.unshift(data[0]);
     if (activities.length > 50) activities.pop();
   } catch (e) { console.error('Erro ao salvar activity:', e); }
@@ -1679,7 +1680,7 @@ async function doLogin() {
   const hashed = CryptoJS.SHA256(password).toString();
   
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('users')
       .select('*')
       .eq('username', username)
@@ -1689,7 +1690,7 @@ async function doLogin() {
     if (data && !error) {
       currentUser = data;
       // Atualizar último login
-      await supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', currentUser.id);
+      await supabaseClient.from('users').update({ last_login: new Date().toISOString() }).eq('id', currentUser.id);
       
       document.getElementById('user-name').textContent = currentUser.full_name || currentUser.username;
       document.getElementById('user-role').textContent = currentUser.role;
@@ -1751,7 +1752,7 @@ async function changePassword() {
   
   const newHash = CryptoJS.SHA256(nw).toString();
   
-  const { error } = await supabase
+  const { error } = await supabaseClient
     .from('users')
     .update({ password_hash: newHash })
     .eq('id', currentUser.id);
@@ -1768,7 +1769,7 @@ async function changePassword() {
 async function updateProfile() {
   const fullName = document.getElementById('profile-fullname').value.trim();
   
-  const { error } = await supabase
+  const { error } = await supabaseClient
     .from('users')
     .update({ full_name: fullName })
     .eq('id', currentUser.id);
@@ -1862,7 +1863,7 @@ async function saveProduct() {
   };
   
   if (editProductId) {
-    const { error } = await supabase.from('products').update(productData).eq('id', editProductId);
+    const { error } = await supabaseClient.from('products').update(productData).eq('id', editProductId);
     if (!error) {
       const index = products.findIndex(p => p.id === editProductId);
       if (index !== -1) products[index] = { ...products[index], ...productData };
@@ -1872,7 +1873,7 @@ async function saveProduct() {
   } else {
     productData.inv_num = nextInvNum++;
     productData.created_at = new Date().toISOString();
-    const { data, error } = await supabase.from('products').insert(productData).select();
+    const { data, error } = await supabaseClient.from('products').insert(productData).select();
     if (!error && data) {
       productData.id = data[0].id;
       products.unshift(productData);
@@ -1889,7 +1890,7 @@ async function saveProduct() {
 async function deleteProduct(id) {
   const p = products.find(x => x.id === id);
   confirmAction('Eliminar Produto', `Eliminar "${p?.name}"? Esta ação é irreversível.`, '🗑️', async () => {
-    const { error } = await supabase.from('products').delete().eq('id', id);
+    const { error } = await supabaseClient.from('products').delete().eq('id', id);
     if (!error) {
       products = products.filter(x => x.id !== id);
       await addActivity(`Produto eliminado: ${p?.name}`, 'delete');
@@ -1962,7 +1963,8 @@ function renderInventory() {
       <td><strong>${p.name}</strong>${p.code ? `<br><small style="color:var(--text-muted)">${p.code}</small>` : ''}</td>
       <td><span class="badge badge-blue">${p.category || '—'}</span></td>
       <td class="${p.qty <= 0 ? 'stock-none' : p.qty <= settings.stockAlert ? 'stock-low' : ''}">${p.qty}</td>
-      <td>${fmt(p.buy_price)}</td><td>${fmt(p.sell_price)}</td>
+      <td>${fmt(p.buy_price)}</td>
+      <td>${fmt(p.sell_price)}</td>
       <td style="color:${profit >= 0 ? 'var(--success)' : 'var(--danger)'}">${profit >= 0 ? '+' : ''}${profit.toFixed(2)} ${settings.currency}</td>
       <td><span class="badge ${statusClass}">${p.status || '—'}</span></td>
       <td><div class="tags-container">${(p.tags || []).map(t => `<span class="tag-chip">${t}</span>`).join('')}</div></td>
@@ -2049,7 +2051,7 @@ async function saveSale() {
   };
   
   if (editSaleId) {
-    const { error } = await supabase.from('sales').update(saleData).eq('id', editSaleId);
+    const { error } = await supabaseClient.from('sales').update(saleData).eq('id', editSaleId);
     if (!error) {
       const index = sales.findIndex(s => s.id === editSaleId);
       if (index !== -1) sales[index] = { ...sales[index], ...saleData };
@@ -2058,22 +2060,22 @@ async function saveSale() {
       if (oldSale) {
         const oldProd = products.find(p => p.id === oldSale.product_id);
         if (oldProd) oldProd.qty += oldSale.qty;
-        await supabase.from('products').update({ qty: oldProd.qty }).eq('id', oldProd.id);
+        await supabaseClient.from('products').update({ qty: oldProd.qty }).eq('id', oldProd.id);
       }
       prod.qty -= qty;
-      await supabase.from('products').update({ qty: prod.qty, status: prod.qty <= 0 ? 'Esgotado' : prod.status }).eq('id', productId);
+      await supabaseClient.from('products').update({ qty: prod.qty, status: prod.qty <= 0 ? 'Esgotado' : prod.status }).eq('id', productId);
       if (prod.qty <= 0) prod.status = 'Esgotado';
     }
   } else {
     saleData.created_at = new Date().toISOString();
-    const { data, error } = await supabase.from('sales').insert(saleData).select();
+    const { data, error } = await supabaseClient.from('sales').insert(saleData).select();
     if (!error && data) {
       saleData.id = data[0].id;
       sales.unshift(saleData);
       nextId = Math.max(nextId, saleData.id + 1);
     }
     prod.qty -= qty;
-    await supabase.from('products').update({ qty: prod.qty, status: prod.qty <= 0 ? 'Esgotado' : prod.status }).eq('id', productId);
+    await supabaseClient.from('products').update({ qty: prod.qty, status: prod.qty <= 0 ? 'Esgotado' : prod.status }).eq('id', productId);
     if (prod.qty <= 0) prod.status = 'Esgotado';
   }
   
@@ -2091,9 +2093,9 @@ async function deleteSale(id) {
     if (prod) {
       prod.qty += parseInt(s.qty || 0);
       if (prod.qty > 0) prod.status = 'Disponível';
-      await supabase.from('products').update({ qty: prod.qty, status: prod.status }).eq('id', prod.id);
+      await supabaseClient.from('products').update({ qty: prod.qty, status: prod.status }).eq('id', prod.id);
     }
-    await supabase.from('sales').delete().eq('id', id);
+    await supabaseClient.from('sales').delete().eq('id', id);
     sales = sales.filter(x => x.id !== id);
     await addActivity(`Venda anulada: ${s.product_name}`, 'delete');
     renderSales();
@@ -2138,7 +2140,7 @@ function renderSales() {
     <td><div class="table-actions">
       <button class="btn btn-danger btn-xs" onclick="deleteSale(${s.id})">🔄 Anular</button>
     </div></td>
-  </table>`).join('');
+  </tr>`).join('');
 }
 
 // ===== DEBTS CRUD =====
@@ -2196,7 +2198,7 @@ async function saveDebt() {
   };
   
   if (editDebtId) {
-    const { error } = await supabase.from('debts').update(debtData).eq('id', editDebtId);
+    const { error } = await supabaseClient.from('debts').update(debtData).eq('id', editDebtId);
     if (!error) {
       const index = debts.findIndex(d => d.id === editDebtId);
       if (index !== -1) debts[index] = { ...debts[index], ...debtData };
@@ -2205,7 +2207,7 @@ async function saveDebt() {
   } else {
     debtData.created_at = new Date().toISOString();
     debtData.payment_history = [];
-    const { data, error } = await supabase.from('debts').insert(debtData).select();
+    const { data, error } = await supabaseClient.from('debts').insert(debtData).select();
     if (!error && data) {
       debtData.id = data[0].id;
       debts.unshift(debtData);
@@ -2222,7 +2224,7 @@ async function saveDebt() {
 async function deleteDebt(id) {
   const d = debts.find(x => x.id === id);
   confirmAction('Eliminar Dívida', `Eliminar dívida de "${d?.client_name}"?`, '🗑️', async () => {
-    await supabase.from('debts').delete().eq('id', id);
+    await supabaseClient.from('debts').delete().eq('id', id);
     debts = debts.filter(x => x.id !== id);
     renderDebts();
     toast('Dívida eliminada', 'warning');
@@ -2246,7 +2248,7 @@ async function confirmPayment() {
   if (!d.payment_history) d.payment_history = [];
   d.payment_history.push({ amount, note: document.getElementById('pay-note').value, date: new Date().toISOString() });
   
-  await supabase.from('debts').update({ paid: d.paid, status: d.status, payment_history: d.payment_history }).eq('id', payingDebtId);
+  await supabaseClient.from('debts').update({ paid: d.paid, status: d.status, payment_history: d.payment_history }).eq('id', payingDebtId);
   
   await addActivity(`Pagamento: ${d.client_name} — ${fmt(amount)}`, 'sale');
   closeModal('payment-modal');
@@ -2345,7 +2347,7 @@ async function saveExpense() {
   };
   
   if (editExpenseId) {
-    const { error } = await supabase.from('expenses').update(expenseData).eq('id', editExpenseId);
+    const { error } = await supabaseClient.from('expenses').update(expenseData).eq('id', editExpenseId);
     if (!error) {
       const index = expenses.findIndex(e => e.id === editExpenseId);
       if (index !== -1) expenses[index] = { ...expenses[index], ...expenseData };
@@ -2353,7 +2355,7 @@ async function saveExpense() {
     }
   } else {
     expenseData.created_at = new Date().toISOString();
-    const { data, error } = await supabase.from('expenses').insert(expenseData).select();
+    const { data, error } = await supabaseClient.from('expenses').insert(expenseData).select();
     if (!error && data) {
       expenseData.id = data[0].id;
       expenses.unshift(expenseData);
@@ -2369,7 +2371,7 @@ async function saveExpense() {
 
 async function deleteExpense(id) {
   confirmAction('Eliminar Despesa', 'Eliminar esta despesa?', '🗑️', async () => {
-    await supabase.from('expenses').delete().eq('id', id);
+    await supabaseClient.from('expenses').delete().eq('id', id);
     expenses = expenses.filter(x => x.id !== id);
     renderExpenses();
     toast('Despesa eliminada', 'warning');
@@ -2515,32 +2517,32 @@ function switchSettingsTab(idx) {
 function renderSettings() {
   renderSettingsSection('cat-list', settings.categories, async (item, i) => {
     settings.categories.splice(i, 1);
-    await supabase.from('user_settings').update({ categories: settings.categories }).eq('user_id', currentUser.id);
+    await supabaseClient.from('user_settings').update({ categories: settings.categories }).eq('user_id', currentUser.id);
     renderSettings();
   });
   renderSettingsSection('tag-list', settings.tags, async (item, i) => {
     settings.tags.splice(i, 1);
-    await supabase.from('user_settings').update({ tags: settings.tags }).eq('user_id', currentUser.id);
+    await supabaseClient.from('user_settings').update({ tags: settings.tags }).eq('user_id', currentUser.id);
     renderSettings();
   });
   renderSettingsSection('type-list', settings.types, async (item, i) => {
     settings.types.splice(i, 1);
-    await supabase.from('user_settings').update({ types: settings.types }).eq('user_id', currentUser.id);
+    await supabaseClient.from('user_settings').update({ types: settings.types }).eq('user_id', currentUser.id);
     renderSettings();
   });
   renderSettingsSection('status-list', settings.statuses, async (item, i) => {
     settings.statuses.splice(i, 1);
-    await supabase.from('user_settings').update({ statuses: settings.statuses }).eq('user_id', currentUser.id);
+    await supabaseClient.from('user_settings').update({ statuses: settings.statuses }).eq('user_id', currentUser.id);
     renderSettings();
   });
   renderSettingsSection('payment-list', settings.payments, async (item, i) => {
     settings.payments.splice(i, 1);
-    await supabase.from('user_settings').update({ payments: settings.payments }).eq('user_id', currentUser.id);
+    await supabaseClient.from('user_settings').update({ payments: settings.payments }).eq('user_id', currentUser.id);
     renderSettings();
   });
   renderSettingsSection('exptype-list', settings.expenseTypes, async (item, i) => {
     settings.expenseTypes.splice(i, 1);
-    await supabase.from('user_settings').update({ expense_types: settings.expenseTypes }).eq('user_id', currentUser.id);
+    await supabaseClient.from('user_settings').update({ expense_types: settings.expenseTypes }).eq('user_id', currentUser.id);
     renderSettings();
   });
   document.getElementById('currency-input').value = settings.currency;
@@ -2565,7 +2567,7 @@ async function addToList(inputId, arr, label, dbField) {
   if (arr.includes(val)) { toast(label + ' já existe!', 'warning'); return; }
   arr.push(val);
   inp.value = '';
-  await supabase.from('user_settings').update({ [dbField]: arr }).eq('user_id', currentUser.id);
+  await supabaseClient.from('user_settings').update({ [dbField]: arr }).eq('user_id', currentUser.id);
   renderSettings();
   toast(label + ' adicionado!', 'success');
 }
@@ -2581,7 +2583,7 @@ async function saveSettings() {
   settings.currency = document.getElementById('currency-input').value.trim() || '€';
   settings.stockAlert = parseInt(document.getElementById('stock-alert-input').value) || 5;
   
-  await supabase.from('user_settings').update({ 
+  await supabaseClient.from('user_settings').update({ 
     currency: settings.currency, 
     stock_alert: settings.stockAlert 
   }).eq('user_id', currentUser.id);
@@ -2621,26 +2623,26 @@ function importBackup(event) {
       for (const product of (data.products || [])) {
         delete product.id;
         product.created_by = currentUser.id;
-        await supabase.from('products').insert(product);
+        await supabaseClient.from('products').insert(product);
       }
       for (const sale of (data.sales || [])) {
         delete sale.id;
         sale.created_by = currentUser.id;
-        await supabase.from('sales').insert(sale);
+        await supabaseClient.from('sales').insert(sale);
       }
       for (const debt of (data.debts || [])) {
         delete debt.id;
         debt.created_by = currentUser.id;
-        await supabase.from('debts').insert(debt);
+        await supabaseClient.from('debts').insert(debt);
       }
       for (const expense of (data.expenses || [])) {
         delete expense.id;
         expense.created_by = currentUser.id;
-        await supabase.from('expenses').insert(expense);
+        await supabaseClient.from('expenses').insert(expense);
       }
       
       if (data.settings) {
-        await supabase.from('user_settings').update({
+        await supabaseClient.from('user_settings').update({
           currency: data.settings.currency || '€',
           stock_alert: data.settings.stockAlert || 5,
           categories: data.settings.categories || settings.categories,
@@ -2712,11 +2714,11 @@ function exportCSV(rows, filename) {
 
 async function clearAllData() {
   confirmAction('⚠️ Limpar TODOS os Dados', 'Esta ação irá apagar TODOS os dados do sistema! Esta operação é irreversível!', '💣', async () => {
-    await supabase.from('products').delete().neq('id', 0);
-    await supabase.from('sales').delete().neq('id', 0);
-    await supabase.from('debts').delete().neq('id', 0);
-    await supabase.from('expenses').delete().neq('id', 0);
-    await supabase.from('activities').delete().neq('id', 0);
+    await supabaseClient.from('products').delete().neq('id', 0);
+    await supabaseClient.from('sales').delete().neq('id', 0);
+    await supabaseClient.from('debts').delete().neq('id', 0);
+    await supabaseClient.from('expenses').delete().neq('id', 0);
+    await supabaseClient.from('activities').delete().neq('id', 0);
     
     products = [];
     sales = [];
