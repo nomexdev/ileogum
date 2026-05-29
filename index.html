@@ -1539,12 +1539,10 @@ select.form-control { cursor: pointer; }
 <script>
 /* ==========================================
    ILE AXE FUNFUN TI OGUM — SISTEMA SUPABASE
-   SEM LOCALSTORAGE, COM USER ADMIN
    ========================================== */
 
 // ===== CONFIGURAÇÃO SUPABASE =====
-// ⚠️ SUBSTITUA ESTAS CREDENCIAIS PELAS SUAS ⚠️
-const SUPABASE_URL = 'https://xrzquinffytavwgvvlxr.supabase.co/rest/v1/';
+const SUPABASE_URL = 'https://xrzquinffytavwgvvlxr.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_wvtT4OyNrIT516jcGtELfQ_ggkAN0NH';
 
 let supabase;
@@ -1572,6 +1570,7 @@ let nextInvNum = 1;
 // ===== INICIALIZAÇÃO =====
 async function initSupabase() {
   supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  console.log('Supabase inicializado com sucesso!');
   await loadAllData();
   updateSyncStatus(true);
 }
@@ -1638,7 +1637,7 @@ async function loadAllData() {
     }
     
     updateSyncStatus(true);
-    if (window.currentPage) navigate(window.currentPage);
+    if (typeof currentPage !== 'undefined') navigate(currentPage);
     else renderDashboard();
     toast('Dados carregados com sucesso!', 'success');
   } catch (e) {
@@ -2139,7 +2138,7 @@ function renderSales() {
     <td><div class="table-actions">
       <button class="btn btn-danger btn-xs" onclick="deleteSale(${s.id})">🔄 Anular</button>
     </div></td>
-  </tr>`).join('');
+  </table>`).join('');
 }
 
 // ===== DEBTS CRUD =====
@@ -2610,15 +2609,16 @@ function exportBackup() {
   toast('Backup exportado!', 'success');
 }
 
-function importBackup(e) {
-  const file = e.target.files[0];
+function importBackup(event) {
+  const file = event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = async ev => {
     try {
       const data = JSON.parse(ev.target.result);
       
-      // Importar dados para o Supabase      for (const product of (data.products || [])) {
+      // Importar dados para o Supabase
+      for (const product of (data.products || [])) {
         delete product.id;
         product.created_by = currentUser.id;
         await supabase.from('products').insert(product);
