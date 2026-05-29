@@ -1038,11 +1038,96 @@ function showToast(msg, type = 'success') {
   setTimeout(() => toast.remove(), 3000);
 }
 
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { 
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.remove('open');
+}
+function openModal(id) { 
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.add('open');
+}
 
 function formatMoney(value) {
   return (value || 0).toFixed(2) + ' ' + settings.currency;
+}
+
+// ===== VERIFICAR E CRIAR TABELAS SE NECESSÁRIO =====
+async function ensureTablesExist() {
+  try {
+    // Tenta criar a tabela users se não existir (via SQL direto no Supabase)
+    const { error: usersError } = await supabase.from('users').select('count', { count: 'exact', head: true });
+    
+    if (usersError && usersError.code === '42P01') {
+      console.log('Tabela users não existe. Por favor, execute o script SQL fornecido no Supabase SQL Editor.');
+      showToast('Erro: Tabelas não configuradas. Execute o script SQL no Supabase.', 'error');
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error('Erro ao verificar tabelas:', e);
+    return false;
+  }
+}
+
+// ===== CRIA USUÁRIO ADMIN SE NÃO EXISTIR =====
+async function ensureAdminUser() {
+  try {
+    // Verifica se já existe algum usuário
+    const { data: existingUsers, error: fetchError } = await supabase
+      .from('users')
+      .select('id')
+      .limit(1);
+    
+    if (fetchError) {
+      console.error('Erro ao verificar usuários:', fetchError);
+      return false;
+    }
+    
+    // Se não existem usuários, cria o admin
+    if (!existingUsers || existingUsers.length === 0) {
+      const adminPassword = 'admin123';
+      const adminHash = CryptoJS.SHA256(adminPassword).toString();
+      
+      const { data: newUser, error: insertError } = await supabase
+        .from('users')
+        .insert({
+          username: 'admin',
+          password_hash: adminHash,
+          full_name: 'Administrador',
+          role: 'admin',
+          created_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+      
+      if (insertError) {
+        console.error('Erro ao criar usuário admin:', insertError);
+        return false;
+      }
+      
+      console.log('Usuário admin criado com sucesso!');
+      
+      // Cria configurações para o admin
+      const { error: settingsError } = await supabase
+        .from('user_settings')
+        .insert({
+          user_id: newUser.id,
+          currency: '€',
+          stock_alert: 5,
+          categories: ['Produtos', 'Serviços', 'Roupas', 'Alimentação', 'Bebidas']
+        });
+      
+      if (settingsError) {
+        console.error('Erro ao criar configurações do admin:', settingsError);
+      }
+      
+      return true;
+    }
+    return true;
+  } catch (e) {
+    console.error('Erro ao garantir usuário admin:', e);
+    return false;
+  }
 }
 
 // ===== LOGIN =====
@@ -1051,12 +1136,19 @@ async function doLogin() {
   const password = document.getElementById('loginPassword').value;
   const hash = CryptoJS.SHA256(password).toString();
   
+  // Primeiro, verifica se as tabelas existem
+  const tablesExist = await ensureTablesExist();
+  if (!tablesExist) return;
+  
+  // Garante que o admin existe
+  await ensureAdminUser();
+  
   const { data, error } = await supabase
     .from('users')
     .select('*')
     .eq('username', username)
     .eq('password_hash', hash)
-    .single();
+    .maybeSingle(); // Usar maybeSingle em vez de single para evitar erro 406
   
   if (data && !error) {
     currentUser = data;
@@ -1072,6 +1164,7 @@ async function doLogin() {
     const errDiv = document.getElementById('loginError');
     errDiv.style.display = 'block';
     setTimeout(() => errDiv.style.display = 'none', 3000);
+    console.error('Erro de login:', error);
   }
 }
 
@@ -1085,40 +1178,79 @@ function doLogout() {
 // ===== LOAD DATA =====
 async function loadData() {
   try {
-    const [productsRes, salesRes, debtsRes, expensesRes, settingsRes, userSettingsRes] = await Promise.all([
-      supabase.from('products').select('*').order('created_at', { ascending: false }),
-      supabase.from('sales').select('*').order('created_at', { ascending: false }),
-      supabase.from('debts').select('*').order('created_at', { ascending: false }),
-      supabase.from('expenses').select('*').order('created_at', { ascending: false }),
-      supabase.from('settings').select('*'),
-      supabase.from('user_settings').select('*').eq('user_id', currentUser.id).single()
-    ]);
+    // Carrega produtos
+    const { data: productsData, error: productsError } = await supabase
+      .from('products')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (productsError) throw productsError;
+    products = productsData || [];
     
-    products = productsRes.data || [];
-    sales = salesRes.data || [];
-    debts = debtsRes.data || [];
-    expenses = expensesRes.data || [];
+    // Carrega vendas
+    const { data: salesData, error: salesError } = await supabase
+      .from('sales')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (salesError) throw salesError;
+    sales = salesData || [];
     
-    if (userSettingsRes.data) {
-      settings.currency = userSettingsRes.data.currency || '€';
-      settings.stockAlert = userSettingsRes.data.stock_alert || 5;
-      settings.categories = userSettingsRes.data.categories || ['Produtos', 'Serviços', 'Roupas'];
+    // Carrega dívidas
+    const { data: debtsData, error: debtsError } = await supabase
+      .from('debts')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (debtsError) throw debtsError;
+    debts = debtsData || [];
+    
+    // Carrega despesas
+    const { data: expensesData, error: expensesError } = await supabase
+      .from('expenses')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (expensesError) throw expensesError;
+    expenses = expensesData || [];
+    
+    // Carrega configurações do usuário
+    const { data: userSettingsData, error: userSettingsError } = await supabase
+      .from('user_settings')
+      .select('*')
+      .eq('user_id', currentUser.id)
+      .maybeSingle();
+    
+    if (userSettingsData) {
+      settings.currency = userSettingsData.currency || '€';
+      settings.stockAlert = userSettingsData.stock_alert || 5;
+      settings.categories = userSettingsData.categories || ['Produtos', 'Serviços', 'Roupas'];
       document.getElementById('settingCurrency').value = settings.currency;
       document.getElementById('settingStockAlert').value = settings.stockAlert;
     }
     
     renderCategoriesList();
     showToast('Dados carregados com sucesso!');
-  } catch(e) { console.error(e); showToast('Erro ao carregar dados', 'error'); }
+  } catch(e) { 
+    console.error('Erro ao carregar dados:', e); 
+    showToast('Erro ao carregar dados: ' + e.message, 'error'); 
+  }
 }
 
 // ===== NAVEGAÇÃO =====
 function navigate(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById(`page${page.charAt(0).toUpperCase() + page.slice(1)}`).classList.add('active');
-  event?.target?.closest('.nav-item')?.classList.add('active');
-  document.getElementById('pageTitle').innerHTML = { dashboard: 'Dashboard', products: 'Produtos', sales: 'Vendas', debts: 'Dívidas', expenses: 'Despesas', settings: 'Configurações' }[page];
+  const pageElement = document.getElementById(`page${page.charAt(0).toUpperCase() + page.slice(1)}`);
+  if (pageElement) pageElement.classList.add('active');
+  
+  // Marca o item do menu como ativo
+  const navItems = document.querySelectorAll('.nav-item');
+  for (let item of navItems) {
+    if (item.getAttribute('onclick') && item.getAttribute('onclick').includes(page)) {
+      item.classList.add('active');
+      break;
+    }
+  }
+  
+  const titles = { dashboard: 'Dashboard', products: 'Produtos', sales: 'Vendas', debts: 'Dívidas', expenses: 'Despesas', settings: 'Configurações' };
+  document.getElementById('pageTitle').innerHTML = titles[page] || 'Dashboard';
   
   if (page === 'dashboard') renderDashboard();
   if (page === 'products') { renderProducts(); loadCategoryFilter(); }
@@ -1161,7 +1293,11 @@ async function renderDashboard() {
   for (let i = 6; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate() - i);
     last7Days.push(d.toLocaleDateString('pt', { weekday: 'short' }));
-    const daySales = sales.filter(s => new Date(s.sale_date).toDateString() === d.toDateString()).reduce((s, v) => s + (v.total || 0), 0);
+    const daySales = sales.filter(s => {
+      if (!s.sale_date) return false;
+      const saleDate = new Date(s.sale_date);
+      return saleDate.toDateString() === d.toDateString();
+    }).reduce((s, v) => s + (v.total || 0), 0);
     salesData.push(daySales);
   }
   
@@ -1201,12 +1337,15 @@ function renderProducts() {
     return true;
   });
   
-  document.getElementById('productsTable').innerHTML = filtered.map(p => {
+  const tbody = document.getElementById('productsTable');
+  if (!tbody) return;
+  
+  tbody.innerHTML = filtered.map(p => {
     const profit = (p.sell_price || 0) - (p.buy_price || 0);
     const stockClass = p.qty <= 0 ? 'stock-none' : p.qty <= settings.stockAlert ? 'stock-low' : '';
     const statusClass = p.qty <= 0 ? 'badge-danger' : p.qty <= settings.stockAlert ? 'badge-warning' : 'badge-success';
     return `<tr>
-      <td>${p.sku || '-'}</td><td><strong>${p.name}</strong><br><small style="color:#64748b">${p.description?.substring(0,50) || ''}</small></td>
+      <td>${p.sku || '-'}</td><td><strong>${p.name}</strong><br><small style="color:#64748b">${(p.description || '').substring(0,50)}</small></td>
       <td>${p.category || '-'}</td><td class="${stockClass}">${p.qty || 0}</td>
       <td>${formatMoney(p.buy_price)}</td><td>${formatMoney(p.sell_price)}</td>
       <td style="color:${profit >= 0 ? '#22c55e' : '#ef4444'}">${formatMoney(profit)}</td>
@@ -1221,7 +1360,9 @@ function filterProducts() { renderProducts(); }
 function loadCategoryFilter() {
   const cats = [...new Set(products.map(p => p.category).filter(Boolean))];
   const select = document.getElementById('productCategoryFilter');
-  select.innerHTML = '<option value="">Todas categorias</option>' + cats.map(c => `<option value="${c}">${c}</option>`).join('');
+  if (select) {
+    select.innerHTML = '<option value="">Todas categorias</option>' + cats.map(c => `<option value="${c}">${c}</option>`).join('');
+  }
 }
 
 function openProductModal(id = null) {
@@ -1253,13 +1394,15 @@ async function saveProduct() {
   if (!product.name) { showToast('Nome obrigatório', 'error'); return; }
   
   if (editProductId) {
-    await supabase.from('products').update(product).eq('id', editProductId);
+    const { error } = await supabase.from('products').update(product).eq('id', editProductId);
+    if (error) throw error;
     const index = products.findIndex(p => p.id === editProductId);
     if (index !== -1) products[index] = { ...products[index], ...product };
     showToast('Produto atualizado!');
   } else {
     product.created_at = new Date().toISOString();
-    const { data } = await supabase.from('products').insert(product).select();
+    const { data, error } = await supabase.from('products').insert(product).select();
+    if (error) throw error;
     if (data) products.unshift(data[0]);
     showToast('Produto adicionado!');
   }
@@ -1270,7 +1413,8 @@ async function saveProduct() {
 
 async function deleteProduct(id) {
   if (!confirm('Eliminar este produto?')) return;
-  await supabase.from('products').delete().eq('id', id);
+  const { error } = await supabase.from('products').delete().eq('id', id);
+  if (error) throw error;
   products = products.filter(p => p.id !== id);
   renderProducts();
   showToast('Produto eliminado');
@@ -1287,9 +1431,12 @@ function renderSales() {
     return true;
   });
   
-  document.getElementById('salesTable').innerHTML = filtered.map(s => `
+  const tbody = document.getElementById('salesTable');
+  if (!tbody) return;
+  
+  tbody.innerHTML = filtered.map(s => `
     <tr>
-      <td>${s.sale_number || `VEN-${s.id}`}</td><td>${s.sale_date?.substring(0,10) || '-'}</td>
+      <td>${s.sale_number || `VEN-${s.id}`}</td><td>${(s.sale_date || '').substring(0,10) || '-'}</td>
       <td>${s.product_name}</td><td>${s.client_name || '-'}</td>
       <td>${s.qty}</td><td><strong>${formatMoney(s.total)}</strong></td>
       <td><span class="badge badge-info">${s.payment_method || '-'}</span></td>
@@ -1301,6 +1448,7 @@ function filterSales() { renderSales(); }
 
 function openSaleModal() {
   const select = document.getElementById('saleProduct');
+  if (!select) return;
   select.innerHTML = '<option value="">Selecionar...</option>' + products.map(p => `<option value="${p.id}" data-price="${p.sell_price || 0}" data-stock="${p.qty}">${p.name} (Stock: ${p.qty}) - ${formatMoney(p.sell_price)}</option>`).join('');
   document.getElementById('saleQty').value = 1;
   document.getElementById('saleClient').value = '';
@@ -1311,14 +1459,20 @@ function openSaleModal() {
 
 function updateSaleTotal() {
   const select = document.getElementById('saleProduct');
+  if (!select) return;
   const price = parseFloat(select.options[select.selectedIndex]?.dataset.price) || 0;
   const qty = parseInt(document.getElementById('saleQty').value) || 0;
   document.getElementById('salePrice').value = price.toFixed(2);
   document.getElementById('saleTotal').value = formatMoney(price * qty);
 }
 
-document.getElementById('saleProduct')?.addEventListener('change', updateSaleTotal);
-document.getElementById('saleQty')?.addEventListener('input', updateSaleTotal);
+// Adicionar event listeners após o DOM carregar
+document.addEventListener('DOMContentLoaded', function() {
+  const saleProduct = document.getElementById('saleProduct');
+  const saleQty = document.getElementById('saleQty');
+  if (saleProduct) saleProduct.addEventListener('change', updateSaleTotal);
+  if (saleQty) saleQty.addEventListener('input', updateSaleTotal);
+});
 
 async function saveSale() {
   const select = document.getElementById('saleProduct');
@@ -1338,10 +1492,12 @@ async function saveSale() {
     client_name: document.getElementById('saleClient').value,
     payment_method: document.getElementById('saleMethod').value,
     sale_date: new Date().toISOString().split('T')[0],
-    created_by: currentUser.id
+    created_by: currentUser.id,
+    created_at: new Date().toISOString()
   };
   
-  const { data } = await supabase.from('sales').insert(sale).select();
+  const { data, error } = await supabase.from('sales').insert(sale).select();
+  if (error) throw error;
   if (data) sales.unshift(data[0]);
   
   product.qty -= qty;
@@ -1358,7 +1514,10 @@ async function deleteSale(id) {
   const sale = sales.find(s => s.id === id);
   if (sale) {
     const product = products.find(p => p.id === sale.product_id);
-    if (product) { product.qty += sale.qty; await supabase.from('products').update({ qty: product.qty }).eq('id', product.id); }
+    if (product) { 
+      product.qty += sale.qty; 
+      await supabase.from('products').update({ qty: product.qty }).eq('id', product.id); 
+    }
   }
   await supabase.from('sales').delete().eq('id', id);
   sales = sales.filter(s => s.id !== id);
@@ -1380,7 +1539,10 @@ function renderDebts() {
     return true;
   });
   
-  document.getElementById('debtsTable').innerHTML = filtered.map(d => {
+  const tbody = document.getElementById('debtsTable');
+  if (!tbody) return;
+  
+  tbody.innerHTML = filtered.map(d => {
     const remaining = (d.total || 0) - (d.paid || 0);
     const statusClass = remaining <= 0 ? 'badge-success' : remaining === d.total ? 'badge-danger' : 'badge-warning';
     const statusText = remaining <= 0 ? 'Pago' : remaining === d.total ? 'Em Dívida' : 'Parcial';
@@ -1390,7 +1552,7 @@ function renderDebts() {
       <td>${formatMoney(d.total)}</td><td>${formatMoney(d.paid)}</td>
       <td class="${remaining > 0 ? 'stock-low' : ''}"><strong>${formatMoney(remaining)}</strong></td>
       <td><span class="badge ${statusClass}">${statusText}</span></td>
-      <td>${d.due_date?.substring(0,10) || '-'}</td>
+      <td>${(d.due_date || '').substring(0,10) || '-'}</td>
       <td>${remaining > 0 ? `<button class="btn btn-success btn-sm" onclick="openPaymentModal(${d.id})"><i class="fas fa-money-bill-wave"></i></button> ` : ''}<button class="btn btn-danger btn-sm" onclick="deleteDebt(${d.id})"><i class="fas fa-trash"></i></button></td>
     </tr>`;
   }).join('');
@@ -1412,7 +1574,7 @@ function openDebtModal(id = null) {
   document.getElementById('debtProduct').value = d?.product_name || '';
   document.getElementById('debtTotal').value = d?.total || 0;
   document.getElementById('debtPaid').value = d?.paid || 0;
-  document.getElementById('debtDueDate').value = d?.due_date?.substring(0,10) || '';
+  document.getElementById('debtDueDate').value = (d?.due_date || '').substring(0,10) || '';
   updateDebtRemain();
   openModal('debtModal');
 }
@@ -1437,7 +1599,8 @@ async function saveDebt() {
     showToast('Dívida atualizada!');
   } else {
     debt.created_at = new Date().toISOString();
-    const { data } = await supabase.from('debts').insert(debt).select();
+    const { data, error } = await supabase.from('debts').insert(debt).select();
+    if (error) throw error;
     if (data) debts.unshift(data[0]);
     showToast('Dívida registada!');
   }
@@ -1484,9 +1647,12 @@ function renderExpenses() {
     return true;
   });
   
-  document.getElementById('expensesTable').innerHTML = filtered.map(e => `
+  const tbody = document.getElementById('expensesTable');
+  if (!tbody) return;
+  
+  tbody.innerHTML = filtered.map(e => `
     <tr>
-      <td>${e.expense_date?.substring(0,10) || '-'}</td>
+      <td>${(e.expense_date || '').substring(0,10) || '-'}</td>
       <td><strong>${e.person}</strong></td>
       <td><span class="badge badge-info">${e.category || '-'}</span></td>
       <td>${formatMoney(e.total)}</td>
@@ -1509,7 +1675,7 @@ function openExpenseModal(id = null) {
   document.getElementById('expPerson').value = e?.person || '';
   document.getElementById('expCategory').value = e?.category || 'Renda';
   document.getElementById('expValue').value = e?.total || 0;
-  document.getElementById('ExpDate').value = e?.expense_date?.substring(0,10) || new Date().toISOString().split('T')[0];
+  document.getElementById('ExpDate').value = (e?.expense_date || new Date().toISOString().split('T')[0]).substring(0,10);
   document.getElementById('expDesc').value = e?.description || '';
   openModal('expenseModal');
 }
@@ -1521,6 +1687,7 @@ async function saveExpense() {
     total: parseFloat(document.getElementById('expValue').value) || 0,
     expense_date: document.getElementById('ExpDate').value,
     description: document.getElementById('expDesc').value,
+    paid: 0,
     updated_at: new Date().toISOString()
   };
   if (!expense.person) { showToast('Nome obrigatório', 'error'); return; }
@@ -1532,7 +1699,8 @@ async function saveExpense() {
     showToast('Despesa atualizada!');
   } else {
     expense.created_at = new Date().toISOString();
-    const { data } = await supabase.from('expenses').insert(expense).select();
+    const { data, error } = await supabase.from('expenses').insert(expense).select();
+    if (error) throw error;
     if (data) expenses.unshift(data[0]);
     showToast('Despesa registada!');
   }
@@ -1553,7 +1721,7 @@ async function deleteExpense(id) {
 function renderCategoriesList() {
   const container = document.getElementById('categoriesList');
   if (container) {
-    container.innerHTML = settings.categories.map(cat => `<span class="badge badge-info" style="padding:6px 12px"><i class="fas fa-tag"></i> ${cat} <button onclick="removeCategory('${cat}')" style="background:none;border:none;color:#ef4444;margin-left:6px;cursor:pointer"><i class="fas fa-times"></i></button></span>`).join('');
+    container.innerHTML = settings.categories.map(cat => `<span class="badge badge-info" style="padding:6px 12px"><i class="fas fa-tag"></i> ${cat} <button onclick="removeCategory('${cat.replace(/'/g, "\\'")}')" style="background:none;border:none;color:#ef4444;margin-left:6px;cursor:pointer"><i class="fas fa-times"></i></button></span>`).join('');
   }
 }
 
@@ -1598,13 +1766,17 @@ async function importBackup(input) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = async (e) => {
-    const data = JSON.parse(e.target.result);
-    for (const p of (data.products || [])) { delete p.id; await supabase.from('products').insert(p); }
-    for (const s of (data.sales || [])) { delete s.id; await supabase.from('sales').insert(s); }
-    for (const d of (data.debts || [])) { delete d.id; await supabase.from('debts').insert(d); }
-    for (const ex of (data.expenses || [])) { delete ex.id; await supabase.from('expenses').insert(ex); }
-    await loadData();
-    showToast('Backup importado!');
+    try {
+      const data = JSON.parse(e.target.result);
+      for (const p of (data.products || [])) { delete p.id; await supabase.from('products').insert(p); }
+      for (const s of (data.sales || [])) { delete s.id; await supabase.from('sales').insert(s); }
+      for (const d of (data.debts || [])) { delete d.id; await supabase.from('debts').insert(d); }
+      for (const ex of (data.expenses || [])) { delete ex.id; await supabase.from('expenses').insert(ex); }
+      await loadData();
+      showToast('Backup importado!');
+    } catch (err) {
+      showToast('Erro ao importar backup: ' + err.message, 'error');
+    }
   };
   reader.readAsText(file);
 }
@@ -1649,7 +1821,8 @@ async function clearAllData() {
 
 // ===== RELÓGIO =====
 function updateClock() {
-  document.getElementById('clock').innerText = new Date().toLocaleTimeString('pt-PT');
+  const clockEl = document.getElementById('clock');
+  if (clockEl) clockEl.innerText = new Date().toLocaleTimeString('pt-PT');
 }
 setInterval(updateClock, 1000);
 updateClock();
@@ -1659,13 +1832,16 @@ window.onload = () => {
   const saved = localStorage.getItem('ileaxe_user');
   if (saved) {
     try {
-      currentUser = JSON.parse(saved);
+      const userData = JSON.parse(saved);
+      currentUser = userData;
       document.getElementById('userName').innerText = currentUser.username;
       document.getElementById('userAvatar').innerText = currentUser.username.charAt(0);
       document.getElementById('loginContainer').classList.add('hidden');
       document.getElementById('mainApp').classList.remove('hidden');
       loadData().then(() => navigate('dashboard'));
-    } catch(e) {}
+    } catch(e) {
+      console.error('Erro ao restaurar sessão:', e);
+    }
   }
 };
 </script>
